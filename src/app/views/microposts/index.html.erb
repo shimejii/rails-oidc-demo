@@ -1,0 +1,28 @@
+<%# ログイン状態に応じてサインイン / サインアウトを出し分ける %>
+<div>
+  <% if logged_in? %>
+    <%= current_user.name %> さん
+    <%= button_to "サインアウト", signout_path, method: :delete %>
+  <% else %>
+    <%= link_to "サインイン", signin_path %>
+  <% end %>
+</div>
+
+<h1>投稿一覧</h1>
+
+<% if @microposts.any? %>
+  <ul>
+    <% @microposts.each do |micropost| %>
+      <li>
+        <%= micropost.message %>
+        （投稿者: <%= micropost.user_id %> /
+        <%= micropost.created_at&.strftime("%Y-%m-%d %H:%M") %>）
+      </li>
+    <% end %>
+  </ul>
+
+  <%# ページネーションのリンク（1ページ 20 件） %>
+  <%= paginate @microposts %>
+<% else %>
+  <p>投稿がまだありません。</p>
+<% end %>

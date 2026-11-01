@@ -1,0 +1,24 @@
+<%# new / edit 共通のフォーム。form_with が送信先(create/update)を自動判定する %>
+<%= form_with model: micropost do |form| %>
+  <% if micropost.errors.any? %>
+    <ul>
+      <% micropost.errors.full_messages.each do |message| %>
+        <li><%= message %></li>
+      <% end %>
+    </ul>
+  <% end %>
+
+  <div>
+    <%= form.label :message, "メッセージ" %>
+    <%= form.text_area :message %>
+  </div>
+
+  <div>
+    <%= form.label :user_id, "投稿者(user_id)" %>
+    <%= form.text_field :user_id %>
+  </div>
+
+  <div>
+    <%= form.submit %>
+  </div>
+<% end %>

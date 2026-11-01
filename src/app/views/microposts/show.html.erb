@@ -1,0 +1,10 @@
+<h1>投稿詳細</h1>
+
+<p>メッセージ: <%= @micropost.message %></p>
+<p>投稿者(user_id): <%= @micropost.user_id %></p>
+<p>作成日時: <%= @micropost.created_at&.strftime("%Y-%m-%d %H:%M") %></p>
+
+<p>
+  <%= link_to "編集", edit_micropost_path(@micropost) %>
+  <%= link_to "一覧に戻る", microposts_path %>
+</p>

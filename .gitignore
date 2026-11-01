@@ -1,0 +1,51 @@
+# ============================================================
+# Git 除外設定（Rails アプリは src/ 配下に配置）
+# ============================================================
+
+# --- 秘密情報（絶対にコミットしない）-----------------------
+# Rails の暗号化認証情報を復号する鍵。漏洩厳禁。
+src/config/master.key
+src/config/credentials/*.key
+# 環境変数ファイル
+.env
+.env.*
+!.env.example
+
+# --- Rails が通常無視するもの ------------------------------
+# ログ・一時ファイル
+src/log/*
+src/tmp/*
+!src/log/.keep
+!src/tmp/.keep
+
+# PID / ソケット
+src/tmp/pids/*
+!src/tmp/pids/.keep
+
+# Active Storage のローカル保存ファイル
+src/storage/*
+!src/storage/.keep
+
+# アップロードされたテスト用ファイル
+src/tmp/storage/*
+
+# --- 依存関係 ----------------------------------------------
+# bundler が vendor にインストールした gem
+src/vendor/bundle
+# Node 関連
+src/node_modules/
+src/yarn-error.log
+
+# --- アセットビルド成果物 ----------------------------------
+src/public/assets
+src/app/assets/builds/*
+!src/app/assets/builds/.keep
+
+# --- OS / エディタ生成物 -----------------------------------
+.DS_Store
+*.swp
+.idea/
+# .vscode/ は共有したい設定もあるため各自判断（ここでは除外しない）
+
+# --- Docker ------------------------------------------------
+# （特になし。Dockerfile / docker-compose.yml はコミット対象）

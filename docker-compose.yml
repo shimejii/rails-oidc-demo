@@ -1,0 +1,70 @@
+# ============================================================
+# Rails + PostgreSQL 開発環境 (docker compose)
+# ============================================================
+# 使い方:
+#   docker compose build          # イメージをビルド
+#   docker compose run --rm web bin/rails db:create db:migrate
+#   docker compose up             # web(3000) と db を起動
+#   docker compose down           # 停止・削除（データは volume に残る）
+# ------------------------------------------------------------
+
+services:
+  # --- Rails アプリ ----------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 開発用: コンテナ起動のたびに古い PID を消してからサーバー起動
+    command: >
+      bash -c "rm -f tmp/pids/server.pid &&
+               bin/rails server -b 0.0.0.0 -p 3000"
+    volumes:
+      # ホストの src/ をコンテナ /app に直結（編集が即反映）
+      - ./src:/app
+      # gem をイメージ外の名前付き volume に永続化（再ビルドで消えない・高速）
+      - bundle:/usr/local/bundle
+      # node_modules はホストと混ざらないよう volume に逃がす
+      - node_modules:/app/node_modules
+    ports:
+      - "3000:3000"
+    # .env の内容を環境変数として注入（GOOGLE_CLIENT_ID などの秘密情報）
+    # .env は .gitignore 済みでコミットされない
+    env_file:
+      - .env
+    environment:
+      # database.yml から参照する接続情報
+      DATABASE_HOST: db
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: password
+      RAILS_ENV: development
+    depends_on:
+      db:
+        condition: service_healthy
+    # コンテナ内で標準入力を保持（binding.pry / debug 用）
+    stdin_open: true
+    tty: true
+
+  # --- PostgreSQL ------------------------------------------
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      # DB データを永続化（コンテナを消してもデータが残る）
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # ホストからDBクライアントで繋ぎたい場合に使用（任意）
+      - "5432:5432"
+    # DB が受付可能になってから web を起動するためのヘルスチェック
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+# --- 名前付きボリューム ------------------------------------
+volumes:
+  postgres_data:
+  bundle:
+  node_modules:

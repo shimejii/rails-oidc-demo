@@ -9,11 +9,12 @@ class SessionsController < ApplicationController
 
   # GET /auth/google
   # 認可リクエストを開始し、Google の認可エンドポイントへリダイレクトする。
-  # CSRF 対策の state、リプレイ対策の nonce を生成してセッションに保存しておく
-  # （コールバックで検証に使う）。
+  # CSRF 対策の state、リプレイ対策の nonce、認可コード横取り対策の PKCE
+  # (code_verifier) を生成してセッションに保存しておく（コールバックで検証に使う）。
   def authorize
-    session[:oauth_state] = SecureRandom.hex(16)
-    session[:oidc_nonce]  = SecureRandom.hex(16)
+    session[:oauth_state]   = SecureRandom.hex(16)
+    session[:oidc_nonce]    = SecureRandom.hex(16)
+    session[:pkce_verifier] = GoogleOidc.generate_code_verifier
 
     redirect_to build_google_authorization_url, allow_other_host: true
   end
@@ -21,23 +22,31 @@ class SessionsController < ApplicationController
   # GET /auth/google/callback
   # Google からのコールバック。認可コードを受け取り、本人を確定してログインする。
   def callback
+    # 認可リクエスト時に保存した一時値は使い捨て。取り出した時点でセッションから削除し、
+    # エラー終了した場合も含めて再利用されないようにする。
+    expected_state = session.delete(:oauth_state)
+    expected_nonce = session.delete(:oidc_nonce)
+    code_verifier  = session.delete(:pkce_verifier)
+
     # ユーザーが同意をキャンセルした場合など（例: error=access_denied）
     if params[:error].present?
       return redirect_to signin_path, alert: "サインインがキャンセルされました。"
     end
 
     # 1. state 検証（CSRF 対策）: 送られてきた state が自分の発行値と一致するか
-    unless params[:state].present? && params[:state] == session[:oauth_state]
+    unless params[:state].present? && expected_state.present? &&
+           ActiveSupport::SecurityUtils.secure_compare(params[:state], expected_state)
       return redirect_to signin_path, alert: "不正なリクエストです（state 不一致）。"
     end
 
     oidc = GoogleOidc.new
 
     # 2. 認可コード → トークン交換（ID トークン取得）
-    tokens = oidc.exchange_code(params[:code])
+    #    PKCE の code_verifier も送る。Google が最初の code_challenge と照合する。
+    tokens = oidc.exchange_code(params[:code], code_verifier: code_verifier)
 
     # 3. ID トークン検証（署名 / iss / aud / exp / nonce）
-    claims = oidc.verify_id_token(tokens["id_token"], expected_nonce: session[:oidc_nonce])
+    claims = oidc.verify_id_token(tokens["id_token"], expected_nonce: expected_nonce)
 
     # 4. 本人確定 → ユーザーを特定（いなければ新規作成）
     user = find_or_create_user_from(claims)
@@ -89,7 +98,10 @@ class SessionsController < ApplicationController
       scope:         "openid email profile",
       state:         session[:oauth_state],
       nonce:         session[:oidc_nonce],
-      prompt:        "select_account"
+      prompt:        "select_account",
+      # PKCE: code_verifier のハッシュ(SHA-256)だけを送る。本体はトークン交換時に送る。
+      code_challenge:        GoogleOidc.code_challenge_for(session[:pkce_verifier]),
+      code_challenge_method: "S256"
     }
 
     "#{GOOGLE_AUTH_ENDPOINT}?#{params.to_query}"

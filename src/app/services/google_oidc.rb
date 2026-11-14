@@ -1,6 +1,9 @@
 require "net/http"
 require "json"
 require "jwt"
+require "base64"
+require "digest"
+require "securerandom"
 
 # Google の OIDC（OpenID Connect）処理をまとめたサービスクラス。
 # 認可コードフローのうち「トークン交換」と「ID トークン検証」を担う。
@@ -17,6 +20,18 @@ class GoogleOidc
 
   class VerificationError < StandardError; end
 
+  # PKCE (RFC 7636): 認可コードの横取り対策。
+  # code_verifier は推測不能なランダム文字列（43〜128 文字の URL セーフ文字）。
+  def self.generate_code_verifier
+    SecureRandom.urlsafe_base64(64) # 86 文字
+  end
+
+  # code_challenge = BASE64URL(SHA256(code_verifier))（パディングなし）。
+  # 認可リクエストにはこのハッシュだけを載せ、verifier 本体はトークン交換まで秘匿する。
+  def self.code_challenge_for(code_verifier)
+    Base64.urlsafe_encode64(Digest::SHA256.digest(code_verifier), padding: false)
+  end
+
   def initialize
     # 認証情報は環境変数から取得する（.env や本番のシークレット管理から注入）。
     # 未設定ならすぐ分かるよう fetch で例外にする。
@@ -27,13 +42,16 @@ class GoogleOidc
 
   # 認可コードをトークン群（id_token / access_token など）に交換する。
   # RP(サーバー) → Google のトークンエンドポイントへの POST。ブラウザは介さない。
-  def exchange_code(code)
+  # code_verifier を送ると、Google は認可リクエスト時の code_challenge と照合し、
+  # 一致しなければ invalid_grant で拒否する。
+  def exchange_code(code, code_verifier:)
     response = post_form(discovery.fetch("token_endpoint"), {
       code:          code,
       client_id:     @client_id,
       client_secret: @client_secret,
       redirect_uri:  @redirect_uri,
-      grant_type:    "authorization_code"
+      grant_type:    "authorization_code",
+      code_verifier: code_verifier
     })
 
     raise VerificationError, "トークン交換に失敗しました: #{response.body}" unless response.is_a?(Net::HTTPSuccess)

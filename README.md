@@ -106,6 +106,63 @@ docker compose up
 
 ブラウザで http://localhost:3000 を開き、「サインイン」から Google ログインを試せる。
 
+## URLs
+
+### 本アプリのエンドポイント
+| メソッド | パス | 役割 |
+| --- | --- | --- |
+| GET | `/signin` | サインイン画面（Google ログインボタン） |
+| GET | `/auth/google` | 認可リクエストの開始（Google へリダイレクト） |
+| GET | `/auth/google/callback` | Google からのコールバック（認可コードを受け取る） |
+| DELETE | `/signout` | サインアウト |
+
+`/auth/google/callback` は、Google Cloud Console の「承認済みのリダイレクト URI」に登録した値と完全一致させる必要がある。
+
+### Google のエンドポイント
+項番（E1〜E4）は、後述のシーケンス図のメッセージに付けた項番と対応している。項番は、認証フローの中で呼ばれる順に振っている。
+
+| 項番 | 名前 | URL | 用途 | シーケンス図での対応 |
+| --- | --- | --- | --- | --- |
+| E1 | 認可エンドポイント | `https://accounts.google.com/o/oauth2/v2/auth` | 認可リクエストの送り先 | クライアントが `302 Location: Google 認可エンドポイント [E1]` でブラウザに送り先として指示し、ブラウザが `GET 認可エンドポイント [E1]` で Google にアクセスする |
+| E2 | Discovery | `https://accounts.google.com/.well-known/openid-configuration` | 各エンドポイントの URL を取得する | クライアントが `GET /.well-known/openid-configuration (Discovery) [E2]` で Google に問い合わせる（図 1）。図 3 ではキャッシュを使うので通信しない |
+| E3 | トークンエンドポイント | `https://oauth2.googleapis.com/token` | 認可コードをトークンに交換する | クライアントが `POST token [E3]` で Google に送る（図 1・図 3）。図 5 では攻撃者が同じエンドポイントに送る |
+| E4 | JWKS | `https://www.googleapis.com/oauth2/v3/certs` | ID トークンの署名検証に使う公開鍵 | クライアントが `GET JWKS (公開鍵) [E4]` で Google から取得する（図 1）。図 3 ではキャッシュを使うので通信しない |
+
+E3 と E4 の URL は、E2 の Discovery ドキュメント（`token_endpoint` / `jwks_uri`）から取得して使う。E1 のみ、コード内の定数（`GOOGLE_AUTH_ENDPOINT`）として持っている。
+
+### 認証 URI パラメータ
+本アプリが `/auth/google` で組み立てる認可リクエスト URL（E1 宛て）の主なクエリパラメータ。
+
+| パラメータ | 必須 | 説明 |
+| --- | --- | --- |
+| `client_id` | 必須 | Cloud Console で取得したクライアント ID |
+| `redirect_uri` | 必須 | Google がレスポンスを返す先 |
+| `response_type` | 必須 | `code` を指定すると認可コードフローになる |
+| `scope` | 必須 | 先頭は `openid` にし、`profile` と `email` のどちらか、または両方を続ける（スペース区切り） |
+| `nonce` | 必須 | リプレイ対策のランダム値。ID トークンに埋め込まれて返る |
+| `state` | 任意（強く推奨） | リクエストとレスポンスの往復で、そのまま返される値。リダイレクト先は推測できるため、自分が開始した認証のレスポンスかを `state` で検証し、CSRF を防ぐ |
+| `code_challenge` | 任意（PKCE） | PKCE のチャレンジ。`code_verifier` を `code_challenge_method` でハッシュ化した値 |
+| `code_challenge_method` | 任意（PKCE） | `code_challenge` の生成方法 |
+
+- `code_challenge` と `code_challenge_method` は、上記の Google ドキュメントの表には載っていない。RFC 7636（PKCE）で定義された標準のパラメータで、Discovery ドキュメントの `code_challenge_methods_supported` に `plain` と `S256` が含まれることを確認している。
+- 実際に組み立てられる URL では、Rails の `to_query` によりパラメータ名がアルファベット順に並ぶ。
+
+```text
+https://accounts.google.com/o/oauth2/v2/auth
+  ?client_id=<CLIENT_ID>
+  &code_challenge=<CODE_CHALLENGE>
+  &code_challenge_method=S256
+  &nonce=<NONCE>
+  &redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fgoogle%2Fcallback
+  &response_type=code
+  &scope=openid+email+profile
+  &state=<STATE>
+```
+
+### 出典
+- Google for Developers「OpenID Connect」の「Authentication URI parameters」
+  https://developers.google.com/identity/openid-connect/openid-connect?hl=ja#authenticationuriparameters
+
 ## シーケンス図
 - エンティティ
     - **ブラウザ**: ユーザーの操作主体
@@ -130,9 +187,9 @@ sequenceDiagram
 
     B->>C: GET /auth/google
     Note over C: state / nonce / code_verifier(PKCE) を生成しセッションに保存<br/>code_challenge = BASE64URL(SHA256(code_verifier))
-    C-->>B: 302 Location: Google 認可エンドポイント<br/>(client_id, redirect_uri, scope=openid.., state, nonce,<br/>code_challenge, code_challenge_method=S256)
+    C-->>B: 302 Location: Google 認可エンドポイント [E1]<br/>(client_id, redirect_uri, scope=openid.., state, nonce,<br/>code_challenge, code_challenge_method=S256)
 
-    B->>G: GET 認可エンドポイント
+    B->>G: GET 認可エンドポイント [E1]
     Note over G: code_challenge を認可コードに紐付けて保持
     G-->>B: ログイン・同意画面
     B->>G: 認証・同意
@@ -142,12 +199,12 @@ sequenceDiagram
     Note over C: セッションから state / nonce / code_verifier を取り出して削除（使い捨て）
     Note over C: ① state 一致確認（params[:state] == セッションの state）<br/>一致 → 続行 / 不一致 → 拒否（図 4）
 
-    C->>G: GET /.well-known/openid-configuration (Discovery)
+    C->>G: GET /.well-known/openid-configuration (Discovery) [E2]
     G-->>C: 各エンドポイント URL
-    C->>G: POST token (code, code_verifier, client_id, client_secret,<br/>redirect_uri, grant_type)
+    C->>G: POST token [E3] (code, code_verifier, client_id, client_secret,<br/>redirect_uri, grant_type)
     Note over G: ② PKCE 照合: SHA256(code_verifier) == 保持している code_challenge ?<br/>一致 → トークン発行 / 不一致 → 400 invalid_grant（図 5）
     G-->>C: 200 { id_token, access_token, .. }
-    C->>G: GET JWKS (公開鍵)
+    C->>G: GET JWKS (公開鍵) [E4]
     G-->>C: 公開鍵セット
 
     Note over C: ③ id_token 検証（署名 / iss / aud / exp / nonce 一致確認）
@@ -168,9 +225,9 @@ sequenceDiagram
 
     B->>C: GET /auth/google
     Note over C: state / nonce / code_verifier(PKCE) を生成しセッションに保存
-    C-->>B: 302 Location: Google 認可エンドポイント
+    C-->>B: 302 Location: Google 認可エンドポイント [E1]
 
-    B->>G: GET 認可エンドポイント
+    B->>G: GET 認可エンドポイント [E1]
     G-->>B: ログイン・同意画面
     B->>G: 同意をキャンセル（拒否）
     G-->>B: 302 Location: /auth/google/callback?error=access_denied&state=..
@@ -195,18 +252,18 @@ sequenceDiagram
 
     B->>C: GET /auth/google
     Note over C: state / nonce / code_verifier(PKCE) を生成しセッションに保存<br/>code_challenge = BASE64URL(SHA256(code_verifier))
-    C-->>B: 302 Location: Google 認可エンドポイント<br/>(.., state, nonce, code_challenge, code_challenge_method=S256)
+    C-->>B: 302 Location: Google 認可エンドポイント [E1]<br/>(.., state, nonce, code_challenge, code_challenge_method=S256)
 
-    B->>G: GET 認可エンドポイント
-    Note over G: ログイン済み/同意済みなら画面をスキップ
+    B->>G: GET 認可エンドポイント [E1]
+    Note over G: 同意済みなら同意画面をスキップ
     G-->>B: 302 Location: /auth/google/callback?code=..&state=..
 
     B->>C: GET /auth/google/callback?code=..&state=..
     Note over C: セッションから state / nonce / code_verifier を取り出して削除（使い捨て）
     Note over C: ① state 一致確認
 
-    Note over C,G: Discovery / JWKS はキャッシュ利用（通信省略）
-    C->>G: POST token (code, code_verifier, client_id, client_secret, ..)
+    Note over C,G: Discovery [E2] / JWKS [E4] はキャッシュ利用（通信省略）
+    C->>G: POST token [E3] (code, code_verifier, client_id, client_secret, ..)
     Note over G: ② PKCE 照合: SHA256(code_verifier) == code_challenge
     G-->>C: 200 { id_token, access_token, .. }
 
@@ -230,7 +287,7 @@ sequenceDiagram
 
     B->>C: GET /auth/google
     Note over C: state=S1 / nonce / code_verifier を生成しセッションに保存
-    C-->>B: 302 Location: Google 認可エンドポイント (state=S1, ..)
+    C-->>B: 302 Location: Google 認可エンドポイント [E1] (state=S1, ..)
 
     Note over B,G: （通常の認可フロー。または攻撃者が別経路で用意した URL）
     B->>C: GET /auth/google/callback?code=..&state=S2
@@ -255,15 +312,15 @@ sequenceDiagram
 
     B->>C: GET /auth/google
     Note over C: code_verifier(V1) を生成しセッションに保存<br/>code_challenge(H1) = BASE64URL(SHA256(V1))
-    C-->>B: 302 Location: Google 認可エンドポイント (code_challenge=H1, ..)
-    B->>G: GET 認可エンドポイント
+    C-->>B: 302 Location: Google 認可エンドポイント [E1] (code_challenge=H1, ..)
+    B->>G: GET 認可エンドポイント [E1]
     Note over G: 認可コードに code_challenge=H1 を紐付けて保持
     G-->>B: 302 Location: /auth/google/callback?code=..&state=..
 
     Note over B,A: ブラウザ経路で認可コードが漏れる（ログ・履歴・悪意あるアプリ等）
     B-->>A: 認可コード（V1 は含まれない）
 
-    A->>G: POST token (横取りした code, code_verifier=推測した値)
+    A->>G: POST token [E3] (横取りした code, code_verifier=推測した値)
     Note over G: PKCE 照合: SHA256(推測した値) == H1 ?<br/>不一致（攻撃者は V1 を知らない）→ 拒否
     G-->>A: 400 { "error": "invalid_grant" }
 ```

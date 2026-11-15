@@ -176,9 +176,42 @@ https://accounts.google.com/o/oauth2/v2/auth
   &state=<STATE>
 ```
 
+### トークンリクエストのパラメータ
+トークンエンドポイント（E3）へ `POST` で送るパラメータ。`application/x-www-form-urlencoded` のフォーム形式で、サーバー間の通信として送る。「定義」と「目的」の見方は、認証 URI パラメータの表と同じ。
+
+| パラメータ | 定義 | 目的 | 説明 |
+| --- | --- | --- | --- |
+| `code` | OAuth 2.0 | ー | 必須。認可エンドポイントから受け取った認可コード |
+| `client_id` | OAuth 2.0 | ー | 必須。Cloud Console で取得したクライアント ID |
+| `client_secret` | OAuth 2.0 | クライアントのなりすまし | 必須。Cloud Console で取得したクライアントシークレット。サーバー間の通信でのみ送り、ブラウザには渡さない |
+| `redirect_uri` | OAuth 2.0 | ー | 必須。最初の認可リクエストで使ったものと同じ値 |
+| `grant_type` | OAuth 2.0 | ー | 必須。`authorization_code` を指定する |
+| `code_verifier` | OAuth 2.0（拡張: PKCE） | 認可コードの横取り | 任意。認可リクエストの前に生成した `code_verifier` の本体。Google が `code_challenge_method` でハッシュ化し、認可リクエストの `code_challenge` と一致するか確認する |
+
+- `code_verifier` は、Google のドキュメントの表には載っていない。PKCE のパラメータで、認可リクエストの `code_challenge` と対になる。
+- `client_secret` は、Google のドキュメントによって「必須」と「省略可」の記載が分かれている。本アプリは常に送っている。
+- クライアント認証は、`client_id` と `client_secret` を HTTP ボディに入れる方式（`client_secret_post`）を使っている。`Authorization: Basic` ヘッダで送る方式（`client_secret_basic`）は使っていない。Google の Discovery ドキュメントの `token_endpoint_auth_methods_supported` には、どちらも含まれている。
+- 通信は HTTPS で暗号化されるので、通信路での安全性は、どちらの方式でも変わらない。RFC 6749 はボディに入れる方式を「推奨しない」としているが、これは Basic 認証を使えないクライアント向けの代替という位置づけである。本アプリは、Google のドキュメントのサンプルに合わせて、ボディに入れる方式にしている。
+- 下のサンプルの改行は、読みやすさのためのもの。実際のボディは 1 行で送る。
+
+```text
+POST /token HTTP/1.1
+Host: oauth2.googleapis.com
+Content-Type: application/x-www-form-urlencoded
+
+code=<CODE>
+&client_id=<CLIENT_ID>
+&client_secret=<CLIENT_SECRET>
+&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fgoogle%2Fcallback
+&grant_type=authorization_code
+&code_verifier=<CODE_VERIFIER>
+```
+
 ### 出典
 - Google for Developers「OpenID Connect」の「Authentication URI parameters」
   https://developers.google.com/identity/openid-connect/openid-connect?hl=ja#authenticationuriparameters
+- Google for Developers「Using OAuth 2.0 for Web Server Applications」の「HTTP/REST」（認可コードをトークンに交換する）
+  https://developers.google.com/identity/protocols/oauth2/web-server?hl=ja
 
 ## シーケンス図
 - エンティティ

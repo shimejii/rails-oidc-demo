@@ -8,20 +8,16 @@ Rails Tutorial 完走後の学習アウトプットです。
 - Rails Tutorial 完走後、ログイン機構・テーブル CRUD を再現して知識を定着させる
 
 ## 利用技術
-- OS
-    - Debian 系（`ruby:3.4-slim-bookworm` ベース）
-- 言語・フレームワーク
-    - Ruby 3.4
-    - Rails 8.1
-- アプリケーションサーバー
-    - Puma
-- データベース
-    - PostgreSQL 17
-- 認証
-    - Google OIDC（認可コードフロー）を自前実装
-    - ID トークンの署名検証のみ `jwt` gem を利用
-- コンテナ
-    - Docker / Docker Compose
+| 区分 | 技術 | バージョン・補足 |
+| --- | --- | --- |
+| OS | Debian 系 | `ruby:3.4-slim-bookworm` ベース |
+| 言語 | Ruby | 3.4 |
+| フレームワーク | Rails | 8.1 |
+| アプリケーションサーバー | Puma | |
+| データベース | PostgreSQL | 17 |
+| 認証 | Google OIDC | 認可コードフローを自前実装 |
+| ライブラリ | `jwt` gem | ID トークンの署名検証のみに利用 |
+| コンテナ | Docker / Docker Compose | |
 
 ## 設計のポイント
 - **認証情報は User に持たせない**
@@ -113,7 +109,7 @@ docker compose up
 | --- | --- | --- |
 | GET | `/signin` | サインイン画面（Google ログインボタン） |
 | GET | `/auth/google` | 認可リクエストの開始（Google へリダイレクト） |
-| GET | `/auth/google/callback` | Google からのコールバック（認可コードを受け取る） |
+| GET | `/auth/google/callback` | 認可コードの受け取り。Google が返した `302` の `Location`（`redirect_uri` に認可コードと `state` を付けた URL）に従って、ブラウザがアクセスしてくる |
 | DELETE | `/signout` | サインアウト |
 
 `/auth/google/callback` は、Google Cloud Console の「承認済みのリダイレクト URI」に登録した値と完全一致させる必要がある。
@@ -121,30 +117,51 @@ docker compose up
 ### Google のエンドポイント
 項番（E1〜E4）は、後述のシーケンス図のメッセージに付けた項番と対応している。項番は、認証フローの中で呼ばれる順に振っている。
 
-| 項番 | 名前 | URL | 用途 | シーケンス図での対応 |
+URL は、`https://` にホストとパスをつなげたもの。
+
+| 項番 | 名前 | ホスト | パス | 用途 |
 | --- | --- | --- | --- | --- |
-| E1 | 認可エンドポイント | `https://accounts.google.com/o/oauth2/v2/auth` | 認可リクエストの送り先 | クライアントが `302 Location: Google 認可エンドポイント [E1]` でブラウザに送り先として指示し、ブラウザが `GET 認可エンドポイント [E1]` で Google にアクセスする |
-| E2 | Discovery | `https://accounts.google.com/.well-known/openid-configuration` | 各エンドポイントの URL を取得する | クライアントが `GET /.well-known/openid-configuration (Discovery) [E2]` で Google に問い合わせる（図 1）。図 3 ではキャッシュを使うので通信しない |
-| E3 | トークンエンドポイント | `https://oauth2.googleapis.com/token` | 認可コードをトークンに交換する | クライアントが `POST token [E3]` で Google に送る（図 1・図 3）。図 5 では攻撃者が同じエンドポイントに送る |
-| E4 | JWKS | `https://www.googleapis.com/oauth2/v3/certs` | ID トークンの署名検証に使う公開鍵 | クライアントが `GET JWKS (公開鍵) [E4]` で Google から取得する（図 1）。図 3 ではキャッシュを使うので通信しない |
+| E1 | 認可エンドポイント | `accounts.google.com` | `/o/oauth2/v2/auth` | 認可リクエストの送信先 |
+| E2 | Discovery | `accounts.google.com` | `/.well-known/openid-configuration` | 各エンドポイントの URL を取得する |
+| E3 | トークンエンドポイント | `oauth2.googleapis.com` | `/token` | 認可コードをトークンに交換する |
+| E4 | JWKS | `www.googleapis.com` | `/oauth2/v3/certs` | ID トークンの署名検証に使う公開鍵 |
 
 E3 と E4 の URL は、E2 の Discovery ドキュメント（`token_endpoint` / `jwks_uri`）から取得して使う。E1 のみ、コード内の定数（`GOOGLE_AUTH_ENDPOINT`）として持っている。
 
+シーケンス図との対応は次のとおり。
+
+- **E1**: クライアントが `302 Location: Google 認可エンドポイント [E1]` でブラウザにリダイレクト先として指示し、ブラウザが `GET 認可エンドポイント [E1]` で Google にアクセスする
+- **E2**: クライアントが `GET /.well-known/openid-configuration (Discovery) [E2]` で Google に問い合わせる（図 1）。図 3 ではキャッシュを使うので通信しない
+- **E3**: クライアントが `POST token [E3]` で Google に送る（図 1・図 3）。図 5 では攻撃者が同じエンドポイントに送る
+- **E4**: クライアントが `GET JWKS (公開鍵) [E4]` で Google から取得する（図 1）。図 3 ではキャッシュを使うので通信しない
+
 ### 認証 URI パラメータ
-本アプリが `/auth/google` で組み立てる認可リクエスト URL（E1 宛て）の主なクエリパラメータ。
+認可エンドポイント（E1）に渡せるクエリパラメータ。Google のドキュメントの表にあるものに、PKCE のパラメータを加えている。
 
-| パラメータ | 必須 | 説明 |
-| --- | --- | --- |
-| `client_id` | 必須 | Cloud Console で取得したクライアント ID |
-| `redirect_uri` | 必須 | Google がレスポンスを返す先 |
-| `response_type` | 必須 | `code` を指定すると認可コードフローになる |
-| `scope` | 必須 | 先頭は `openid` にし、`profile` と `email` のどちらか、または両方を続ける（スペース区切り） |
-| `nonce` | 必須 | リプレイ対策のランダム値。ID トークンに埋め込まれて返る |
-| `state` | 任意（強く推奨） | リクエストとレスポンスの往復で、そのまま返される値。リダイレクト先は推測できるため、自分が開始した認証のレスポンスかを `state` で検証し、CSRF を防ぐ |
-| `code_challenge` | 任意（PKCE） | PKCE のチャレンジ。`code_verifier` を `code_challenge_method` でハッシュ化した値 |
-| `code_challenge_method` | 任意（PKCE） | `code_challenge` の生成方法 |
+- **定義**: そのパラメータを定めている仕様。OAuth 2.0、OIDC、Google 独自のいずれか
+- **目的**: そのパラメータで防ぎたい攻撃や、守りたい原則。明確なものがないパラメータは「ー」とした
 
-- `code_challenge` と `code_challenge_method` は、上記の Google ドキュメントの表には載っていない。RFC 7636（PKCE）で定義された標準のパラメータで、Discovery ドキュメントの `code_challenge_methods_supported` に `plain` と `S256` が含まれることを確認している。
+| パラメータ | 定義 | 目的 | 説明 |
+| --- | --- | --- | --- |
+| `client_id` | OAuth 2.0 | ー | 必須。Cloud Console で取得したクライアント ID |
+| `redirect_uri` | OAuth 2.0 | リダイレクト先のすり替えによる認可コードの漏えい | 必須。ブラウザのリダイレクト先。事前登録した値と一致している必要があり、Google はこの URI を `302` の `Location` に入れて返す |
+| `response_type` | OAuth 2.0 | ー | 必須。`code` を指定すると認可コードフローになる |
+| `scope` | OAuth 2.0 | 取得する情報の範囲の限定（最小権限） | 必須。先頭は `openid`（OIDC のスコープ）にし、`profile` と `email` のどちらか、または両方を続ける（スペース区切り） |
+| `state` | OAuth 2.0 | CSRF（ログイン CSRF） | 任意（強く推奨）。リクエストとレスポンスの往復で、そのまま返される値。リダイレクト先は推測できるため、自分が開始した認証のレスポンスかを `state` で検証する |
+| `code_challenge` | OAuth 2.0（拡張: PKCE） | 認可コードの横取り | 任意。`code_verifier` を `code_challenge_method` でハッシュ化した値 |
+| `code_challenge_method` | OAuth 2.0（拡張: PKCE） | 認可コードの横取り | 任意。`code_challenge` の生成方法 |
+| `nonce` | OIDC | ID トークンのリプレイ攻撃 | 必須。ID トークンに埋め込まれて返る |
+| `prompt` | OIDC | ー | 省略可。ユーザーに再認証や同意を求めるかどうか。スペース区切りで複数指定できる。`none`: 認証・同意の画面を出さず、未認証や未同意ならエラーを返す。`consent`: 同意を求める。`select_account`: アカウントの選択を求める。未指定で、ユーザーが未承認なら同意画面を表示する |
+| `login_hint` | OIDC | 別のアカウントでサインインしてしまう誤りの回避 | 省略可。認証したいユーザーが分かっているときのヒント。アカウント選択を省略し、メール欄の事前入力や、適切なセッションの選択を行う。値はメールアドレスまたは `sub` |
+| `display` | OIDC | ー | 省略可。認証・同意画面の表示方法（`page` / `popup` / `touch` / `wap`）。Google は受け付けるが、プロトコルの動作には影響しない |
+| `claims` | OIDC | ー | 省略可。UserInfo エンドポイントや ID トークンに含める任意の項目を、JSON で指定する。Google は `amr`（最後の認証方法）と `auth_time`（最後の認証時刻）を受け付ける。どちらも設定での有効化が必要 |
+| `access_type` | Google 独自 | ー | 省略可。`offline` または `online`。アクセストークンを要求する場合、`offline` を指定しないとリフレッシュトークンは受け取れない |
+| `include_granted_scopes` | Google 独自 | ー | 省略可。`true` を指定すると、過去に付与されたスコープも今回の認可に含める。インストール済みアプリのフローでは使えない |
+| `hd` | Google 独自 | ー | 省略可。Google Cloud 組織のドメイン（例: `mycollege.edu`）を指定すると、アカウント選択 UI をそのドメイン向けに最適化する。`hd=*` で組織アカウント全般。クライアント側で改ざんできるため、アクセス制御には使えない。制限する場合は、ID トークンの `hd` クレームを検証する |
+| `hl` | Google 独自 | ー | 省略可。サインイン・アカウント選択・同意画面の表示言語（BCP 47 の言語タグ。例: `en-GB`）。未指定なら、アカウントまたはブラウザの設定に従う |
+
+- 「定義」と「目的」の列は、Google のドキュメントの表にはない。OpenID Connect Core 1.0、OAuth 2.0（RFC 6749）、PKCE（RFC 7636）の仕様をもとに整理した。
+- `code_challenge` と `code_challenge_method` は、Google のドキュメントの表には載っていない。Discovery ドキュメントの `code_challenge_methods_supported` に `plain` と `S256` が含まれることを確認している。
 - 実際に組み立てられる URL では、Rails の `to_query` によりパラメータ名がアルファベット順に並ぶ。
 
 ```text
